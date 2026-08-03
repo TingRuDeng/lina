@@ -1,5 +1,6 @@
 <template>
   <IBox>
+    <slot />
     <GenericCreateUpdateForm v-bind="iConfig" @submit-success="submitSuccess" />
   </IBox>
 </template>

@@ -1,5 +1,18 @@
 <template>
-  <BaseAuth :config="settings" enable-field="AUTH_OPENID" />
+  <BaseAuth :config="settings" enable-field="AUTH_OPENID">
+    <div class="callback-url">
+      <span class="callback-url-label">{{ $t('OIDCCallbackURL') }}</span>
+      <el-input :model-value="callbackUrl" readonly>
+        <template #append>
+          <el-tooltip :content="$t('Copy')" placement="top">
+            <el-button @click="copyCallbackUrl">
+              <el-icon><CopyDocument /></el-icon>
+            </el-button>
+          </el-tooltip>
+        </template>
+      </el-input>
+    </div>
+  </BaseAuth>
 </template>
 
 <script>
@@ -7,14 +20,13 @@ import BaseAuth from './Base'
 import { JsonEditor, UpdateToken } from '@/components/Form/FormFields'
 import { JsonRequired } from '@/components/Form/DataForm/rules'
 import { getOrgSelect2Meta } from '@/views/settings/Auth/const'
-import _ from 'lodash'
+import { copy } from '@/utils/common/index'
 export default {
   name: 'OIDC',
   components: {
     BaseAuth
   },
   data() {
-    const vm = this
     return {
       settings: {
         url: '/api/v1/settings/setting/?category=oidc',
@@ -71,15 +83,7 @@ export default {
           },
           AUTH_OPENID_PROVIDER_ENDPOINT: {
             helpTextAsTip: false,
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK'],
-            on: {
-              input: _.debounce(function ([value], updateForm) {
-                if (value.endsWith('/')) {
-                  value = value.slice(0, -1)
-                }
-                vm.onProviderEndpointChange(value, updateForm)
-              }, 1000)
-            }
+            hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
           },
           AUTH_OPENID_PROVIDER_AUTHORIZATION_ENDPOINT: {
             hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
@@ -103,25 +107,25 @@ export default {
             hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
           },
           AUTH_OPENID_PKCE: {
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
+            hidden: false
           },
           AUTH_OPENID_CODE_CHALLENGE_METHOD: {
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK'] || !form['AUTH_OPENID_PKCE']
+            hidden: (form) => !form['AUTH_OPENID_PKCE']
           },
           AUTH_OPENID_SCOPES: {
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
+            hidden: false
           },
           AUTH_OPENID_ID_TOKEN_MAX_AGE: {
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
+            hidden: false
           },
           AUTH_OPENID_ID_TOKEN_INCLUDE_CLAIMS: {
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
+            hidden: false
           },
           AUTH_OPENID_USE_STATE: {
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
+            hidden: false
           },
           AUTH_OPENID_USE_NONCE: {
-            hidden: (form) => form['AUTH_OPENID_KEYCLOAK']
+            hidden: false
           },
           AUTH_OPENID_IGNORE_SSL_VERIFICATION: {},
           AUTH_OPENID_SHARE_SESSION: {},
@@ -129,70 +133,103 @@ export default {
             component: JsonEditor,
             rules: [JsonRequired]
           },
-          OPENID_ORG_IDS: getOrgSelect2Meta()
+          OPENID_ORG_IDS: getOrgSelect2Meta({ licenseRequired: false })
         },
+        moreButtons: [
+          {
+            title: this.$t('Test'),
+            loading: false,
+            callback: (value, form, button) => {
+              button.loading = true
+              const discoveryConfig = {
+                AUTH_OPENID_KEYCLOAK: value.AUTH_OPENID_KEYCLOAK,
+                AUTH_OPENID_SERVER_URL: value.AUTH_OPENID_SERVER_URL,
+                AUTH_OPENID_REALM_NAME: value.AUTH_OPENID_REALM_NAME,
+                AUTH_OPENID_PROVIDER_ENDPOINT: value.AUTH_OPENID_PROVIDER_ENDPOINT,
+                AUTH_OPENID_IGNORE_SSL_VERIFICATION: value.AUTH_OPENID_IGNORE_SSL_VERIFICATION,
+                BASE_SITE_URL: value.BASE_SITE_URL
+              }
+              this.$axios
+                .post('/api/v1/settings/oidc/testing/', discoveryConfig, {
+                  disableFlashErrorMsg: true
+                })
+                .then((res) => {
+                  const discovered = {
+                    AUTH_OPENID_PROVIDER_ENDPOINT: res.issuer,
+                    ...(res.endpoints || {})
+                  }
+                  form.updateForm(discovered)
+                  this.testedCallbackUrl = res.callback_url
+                  this.$message.success(res.msg)
+                })
+                .catch((error) => {
+                  const data = error.response?.data || {}
+                  const validationErrors = Object.values(data).flat().join('; ')
+                  const message = data.error || validationErrors || error.message
+                  this.$message.error(message)
+                })
+                .finally(() => {
+                  button.loading = false
+                })
+            }
+          }
+        ],
         submitMethod: () => 'patch',
         afterGetFormValue(obj) {
           return obj
         },
         cleanFormValue(data) {
+          if (data['AUTH_OPENID_CLIENT_SECRET'] === '') {
+            delete data['AUTH_OPENID_CLIENT_SECRET']
+          }
           return data
         }
-      }
+      },
+      testedCallbackUrl: ''
+    }
+  },
+  computed: {
+    callbackUrl() {
+      return this.testedCallbackUrl || `${window.location.origin}/core/auth/openid/callback/`
     }
   },
   methods: {
-    async onProviderEndpointChange(value, updateForm) {
-      let data = {}
-      try {
-        data = await this.discovery(value)
-      } catch (err) {
-        data = this.setDefault(value)
-      }
-      updateForm(data)
-    },
-    async discovery(issuer, updateForm) {
-      if (!issuer.startsWith('http')) {
-        throw new Error('Invalid issuer')
-      }
-      const url = `${issuer}/.well-known/openid-configuration`
-      const config = {
-        ignoreSSLVerification: true,
-        disableFlashErrorMsg: true
-      }
-      const configMap = {
-        AUTH_OPENID_PROVIDER_AUTHORIZATION_ENDPOINT: 'authorization_endpoint',
-        AUTH_OPENID_PROVIDER_TOKEN_ENDPOINT: 'token_endpoint',
-        AUTH_OPENID_PROVIDER_JWKS_ENDPOINT: 'jwks_uri',
-        AUTH_OPENID_PROVIDER_USERINFO_ENDPOINT: 'userinfo_endpoint',
-        AUTH_OPENID_PROVIDER_END_SESSION_ENDPOINT: 'end_session_endpoint'
-      }
-      const res = await this.$axios.get(url, config)
-      const data = {}
-      for (const [k, v] of Object.entries(configMap)) {
-        data[k] = res[v]
-      }
-      if (Object.keys(data).length < 5) {
-        throw new Error('Invalid issuer, missing required fields')
-      }
-      return data
-    },
-    setDefault(issuer) {
-      const fields = {
-        AUTH_OPENID_PROVIDER_AUTHORIZATION_ENDPOINT: 'authorize',
-        AUTH_OPENID_PROVIDER_TOKEN_ENDPOINT: 'token',
-        AUTH_OPENID_PROVIDER_JWKS_ENDPOINT: 'jwks',
-        AUTH_OPENID_PROVIDER_USERINFO_ENDPOINT: 'userinfo',
-        AUTH_OPENID_PROVIDER_END_SESSION_ENDPOINT: 'logout'
-      }
-      const data = {}
-      for (const [k, v] of Object.entries(fields)) {
-        data[k] = issuer + '/' + v
-      }
-      return data
+    copyCallbackUrl() {
+      copy(this.callbackUrl)
     }
   }
 }
 </script>
 
-<style scoped></style>
+<style lang="scss" scoped>
+.callback-url {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 20px 0 0;
+
+  .callback-url-label {
+    flex: 0 0 18.2%;
+    text-align: right;
+    font-size: 13px;
+    color: var(--color-text-primary);
+  }
+
+  .el-input {
+    max-width: 720px;
+  }
+}
+
+@media (max-width: 768px) {
+  .callback-url {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+
+    .callback-url-label {
+      flex: 0 0 auto;
+      text-align: left;
+    }
+  }
+}
+</style>

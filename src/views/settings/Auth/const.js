@@ -8,7 +8,7 @@ const t = i18n.global.t.bind(i18n.global)
 
 export const authLocalStorage = new ObjectLocalStorage('auth')
 
-export function getOrgSelect2Meta() {
+export function getOrgSelect2Meta({ licenseRequired = true } = {}) {
   return {
     component: Select2,
     el: {
@@ -21,7 +21,7 @@ export function getOrgSelect2Meta() {
       }
     },
     hidden: () => {
-      return !store.getters.hasValidLicense
+      return licenseRequired && !store.getters.hasValidLicense
     }
   }
 }
@@ -35,14 +35,6 @@ export function getAuthItems() {
       authKey: 'AUTH_LDAP_HA',
       description: t('LdapHaSummary'),
       type: 'common'
-    },
-    {
-      name: 'OIDC',
-      title: t('OIDC'),
-      logo: getAssetUrl('img/auth/oidc_logo.png'),
-      authKey: 'AUTH_OPENID',
-      type: 'SSO',
-      description: t('OidcSummary')
     },
     {
       name: 'SAML2',
@@ -134,6 +126,14 @@ export function getAuthItems() {
       authKey: 'AUTH_CAS',
       description: t('CasSummary'),
       type: 'SSO'
+    },
+    {
+      name: 'OIDC',
+      title: t('OIDC'),
+      logo: getAssetUrl('img/auth/oidc_logo.png'),
+      authKey: 'AUTH_OPENID',
+      type: 'SSO',
+      description: t('OidcSummary')
     },
     {
       name: 'Passkey',
